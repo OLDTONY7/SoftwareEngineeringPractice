@@ -18,10 +18,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 
-// ==========================================
-// 1. Domain Entities
-// ==========================================
-
+// Domain Entities
 class Product {
     String id;
     String name;
@@ -48,15 +45,10 @@ class SaleItem {
     }
 }
 
-// ==========================================
-// 2. System Controller (Backend)
-// ==========================================
-
+// System Controller (Backend)
 class POSSystem {
     private Map<String, Product> inventory = new HashMap<>();
     private List<SaleItem> currentCart = new ArrayList<>();
-
-    // 数据库连接
     private final String DB_URL = "jdbc:sqlite:pos.db?busy_timeout=5000";
 
     public POSSystem() {
@@ -69,11 +61,8 @@ class POSSystem {
     }
 
     private void initDatabase() {
-        try (Connection conn = connect();
-             Statement stmt = conn.createStatement()) {
-
-            stmt.execute("PRAGMA journal_mode=WAL;"); // 开启并发模式
-
+        try (Connection conn = connect(); Statement stmt = conn.createStatement()) {
+            stmt.execute("PRAGMA journal_mode=WAL;");
             String sqlCreate = "CREATE TABLE IF NOT EXISTS products ("
                     + "id TEXT PRIMARY KEY, "
                     + "name TEXT NOT NULL, "
@@ -81,7 +70,6 @@ class POSSystem {
                     + "stock INTEGER)";
             stmt.execute(sqlCreate);
 
-            // 默认数据
             ResultSet rs = stmt.executeQuery("SELECT count(*) FROM products");
             if (rs.next() && rs.getInt(1) == 0) {
                 addProductToCatalog("101", "Fresh Milk", 3.50, 20);
@@ -90,7 +78,6 @@ class POSSystem {
                 addProductToCatalog("104", "Cola Can", 1.50, 50);
                 addProductToCatalog("105", "Chocolate Bar", 2.00, 30);
             }
-
         } catch (Exception e) {
             System.err.println("DB Init Error: " + e.getMessage());
         }
@@ -99,9 +86,7 @@ class POSSystem {
     private void loadInventoryFromDB() {
         inventory.clear();
         String sql = "SELECT id, name, price, stock FROM products";
-        try (Connection conn = connect();
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(sql)) {
+        try (Connection conn = connect(); Statement stmt = conn.createStatement(); ResultSet rs = stmt.executeQuery(sql)) {
             while (rs.next()) {
                 Product p = new Product(
                         rs.getString("id"),
@@ -118,8 +103,7 @@ class POSSystem {
 
     private void updateProductStockInDB(String productId, int newStock) {
         String sql = "UPDATE products SET stock = ? WHERE id = ?";
-        try (Connection conn = connect();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+        try (Connection conn = connect(); PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setInt(1, newStock);
             pstmt.setString(2, productId);
             pstmt.executeUpdate();
@@ -128,31 +112,24 @@ class POSSystem {
         }
     }
 
-    // --- [新增功能] 手动添加商品 ---
     public void addProductToCatalog(String id, String name, double price, int stock) throws Exception {
         if (inventory.containsKey(id)) {
             throw new Exception("Product ID '" + id + "' already exists.");
         }
 
         String sql = "INSERT INTO products(id, name, price, stock) VALUES(?,?,?,?)";
-        try (Connection conn = connect();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+        try (Connection conn = connect(); PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, id);
             pstmt.setString(2, name);
             pstmt.setDouble(3, price);
             pstmt.setInt(4, stock);
             pstmt.executeUpdate();
-
-            // 更新内存缓存
             Product newProduct = new Product(id, name, price, stock);
             inventory.put(id, newProduct);
-
         } catch (SQLException e) {
             throw new Exception("Database Error: " + e.getMessage());
         }
     }
-
-    // --- Business Logic ---
 
     public Product getProduct(String id) {
         return inventory.get(id);
@@ -179,7 +156,6 @@ class POSSystem {
 
         SaleItem item = new SaleItem(p, quantity);
         currentCart.add(item);
-
         return String.format("Recorded: %s x%d = $%.2f", p.name, quantity, item.subtotal);
     }
 
@@ -193,7 +169,6 @@ class POSSystem {
         if (cashTendered < total) throw new Exception(String.format("Insufficient cash. Need $%.2f", total));
 
         double change = cashTendered - total;
-
         for (SaleItem item : currentCart) {
             item.product.stock -= item.quantity;
             updateProductStockInDB(item.product.id, item.product.stock);
@@ -211,7 +186,6 @@ class POSSystem {
         p.stock += quantity;
         updateProductStockInDB(p.id, p.stock);
         double refundAmount = p.price * quantity;
-
         boolean creditCardSuccess = new Random().nextBoolean();
 
         StringBuilder msg = new StringBuilder();
@@ -225,7 +199,6 @@ class POSSystem {
             msg.append("ALERT: Credit Card Refund DECLINED.\n");
             msg.append(String.format("ACTION: Refund CASH $%.2f", refundAmount));
         }
-
         return msg.toString();
     }
 
@@ -255,24 +228,18 @@ class POSSystem {
     }
 }
 
-// ==========================================
-// 3. UI Layer (Frontend)
-// ==========================================
-
+// UI Layer (Frontend)
 public class POSApplication extends JFrame {
 
     private POSSystem system;
-
-    // UI Components
     private ModernTextField txtId, txtQty, txtCash;
     private JTextArea txtScreen;
     private JTable tblInventory;
     private DefaultTableModel tableModel;
     private JLabel lblTotal;
-
     private boolean isNewTransaction = true;
 
-    // Colors
+    // Color Constants
     private final Color CLR_BG_DARK     = new Color(33, 33, 33);
     private final Color CLR_PANEL       = new Color(48, 48, 48);
     private final Color CLR_TEXT_MAIN   = new Color(240, 240, 240);
@@ -280,10 +247,10 @@ public class POSApplication extends JFrame {
     private final Color CLR_ACCENT_BLUE = new Color(58, 150, 221);
     private final Color CLR_ACCENT_GREEN= new Color(76, 175, 80);
     private final Color CLR_ACCENT_RED  = new Color(229, 57, 53);
-    private final Color CLR_ACCENT_ORANGE = new Color(255, 152, 0); // ADMIN Color
+    private final Color CLR_ACCENT_ORANGE = new Color(255, 152, 0);
     private final Color CLR_INPUT_BG    = new Color(60, 60, 60);
 
-    // Fonts
+    // Font Constants
     private final Font FONT_HEADER = new Font("Segoe UI", Font.BOLD, 22);
     private final Font FONT_LABEL  = new Font("Segoe UI", Font.PLAIN, 14);
     private final Font FONT_INPUT  = new Font("Segoe UI", Font.PLAIN, 16);
@@ -317,7 +284,7 @@ public class POSApplication extends JFrame {
         mainContainer.setBorder(new EmptyBorder(20, 20, 20, 20));
         add(mainContainer);
 
-        // --- Left Panel ---
+        // Left Panel
         JPanel leftPanel = new JPanel();
         leftPanel.setLayout(new BoxLayout(leftPanel, BoxLayout.Y_AXIS));
         leftPanel.setBackground(CLR_PANEL);
@@ -330,7 +297,6 @@ public class POSApplication extends JFrame {
         leftPanel.add(title);
         leftPanel.add(Box.createVerticalStrut(20));
 
-        // Inputs
         leftPanel.add(createLabel("Item ID / Barcode"));
         leftPanel.add(Box.createVerticalStrut(5));
         txtId = new ModernTextField();
@@ -344,7 +310,6 @@ public class POSApplication extends JFrame {
         leftPanel.add(txtQty);
         leftPanel.add(Box.createVerticalStrut(20));
 
-        // Cashier Buttons
         leftPanel.add(createSectionLabel("ACTIONS"));
         leftPanel.add(Box.createVerticalStrut(10));
 
@@ -358,7 +323,6 @@ public class POSApplication extends JFrame {
         leftPanel.add(btnReturn);
         leftPanel.add(Box.createVerticalStrut(20));
 
-        // Payment
         leftPanel.add(createSectionLabel("PAYMENT"));
         leftPanel.add(Box.createVerticalStrut(10));
         txtCash = new ModernTextField();
@@ -370,7 +334,6 @@ public class POSApplication extends JFrame {
         btnPay.addActionListener(e -> actionPay());
         leftPanel.add(btnPay);
 
-        // --- [新增] ADMIN / Manage 区域 ---
         leftPanel.add(Box.createVerticalStrut(20));
         leftPanel.add(createSectionLabel("ADMIN / MANAGE"));
         leftPanel.add(Box.createVerticalStrut(10));
@@ -378,7 +341,6 @@ public class POSApplication extends JFrame {
         btnAddProduct.addActionListener(e -> actionAddProduct());
         leftPanel.add(btnAddProduct);
 
-        // Inventory Table
         leftPanel.add(Box.createVerticalStrut(20));
         leftPanel.add(createSectionLabel("LIVE INVENTORY (DB)"));
         leftPanel.add(Box.createVerticalStrut(5));
@@ -423,7 +385,7 @@ public class POSApplication extends JFrame {
         scrollInv.setAlignmentX(Component.LEFT_ALIGNMENT);
         leftPanel.add(scrollInv);
 
-        // --- Right Panel ---
+        // Right Panel
         JPanel rightPanel = new JPanel(new BorderLayout());
         rightPanel.setBackground(Color.BLACK);
         rightPanel.setBorder(new LineBorder(new Color(60,60,60), 5));
@@ -431,7 +393,7 @@ public class POSApplication extends JFrame {
         txtScreen = new JTextArea();
         txtScreen.setFont(new Font("Monospaced", Font.BOLD, 16));
         txtScreen.setBackground(Color.BLACK);
-        txtScreen.setForeground(new Color(0, 255, 100)); // Green
+        txtScreen.setForeground(new Color(0, 255, 100));
         txtScreen.setEditable(false);
         txtScreen.setText("\n  >> SYSTEM INITIALIZED...\n  >> READY FOR TRANSACTION...\n");
         txtScreen.setMargin(new Insets(20, 20, 20, 20));
@@ -461,7 +423,6 @@ public class POSApplication extends JFrame {
         mainContainer.add(splitPane, BorderLayout.CENTER);
     }
 
-    // --- Helpers ---
     private JLabel createLabel(String text) {
         JLabel l = new JLabel(text);
         l.setFont(FONT_LABEL);
@@ -511,8 +472,7 @@ public class POSApplication extends JFrame {
         isNewTransaction = true;
     }
 
-    // --- Actions ---
-
+    // Action Methods
     private void actionScan() {
         try {
             checkAutoRefresh();
@@ -520,7 +480,6 @@ public class POSApplication extends JFrame {
             int qty = Integer.parseInt(txtQty.getText().trim());
 
             String msg = system.recordSaleItem(id, qty);
-
             log(">> " + msg);
             lblTotal.setText(String.format("Total: $%.2f", system.getRunningTotal()));
             txtId.setText("");
@@ -571,9 +530,7 @@ public class POSApplication extends JFrame {
         }
     }
 
-    // --- [新增] 手动添加商品按钮逻辑 ---
     private void actionAddProduct() {
-        // 创建一个弹出面板
         JPanel panel = new JPanel(new GridLayout(4, 2, 10, 10));
         panel.setPreferredSize(new Dimension(300, 150));
 
@@ -582,7 +539,6 @@ public class POSApplication extends JFrame {
         ModernTextField fieldPrice = new ModernTextField();
         ModernTextField fieldStock = new ModernTextField();
 
-        // 为了在 JOptionPane 里显示，我们需要把 ModernTextField 的颜色稍微调亮一点或者用普通 label
         panel.add(new JLabel("New Item ID:"));
         panel.add(fieldId);
         panel.add(new JLabel("Item Name:"));
@@ -604,16 +560,10 @@ public class POSApplication extends JFrame {
                 double price = Double.parseDouble(fieldPrice.getText().trim());
                 int stock = Integer.parseInt(fieldStock.getText().trim());
 
-                // 调用后台添加
                 system.addProductToCatalog(id, name, price, stock);
-
-                // 成功提示
                 JOptionPane.showMessageDialog(this, "Product Added Successfully!");
                 log(">> ADMIN: New Product Added (" + name + ")");
-
-                // 刷新库存表
                 refreshInventoryUI();
-
             } catch (NumberFormatException ex) {
                 JOptionPane.showMessageDialog(this, "Invalid Price or Stock number.", "Error", JOptionPane.ERROR_MESSAGE);
             } catch (Exception ex) {
@@ -622,8 +572,7 @@ public class POSApplication extends JFrame {
         }
     }
 
-    // --- Custom Components ---
-
+    // Custom Components
     class ModernButton extends JButton {
         private Color normalColor;
         private Color hoverColor;
