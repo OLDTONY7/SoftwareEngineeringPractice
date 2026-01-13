@@ -1,8 +1,14 @@
-import javax.swing.;
+import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.border.LineBorder;
-import java.awt.;
-import java.sql.;  [关键] 引入SQL包
+import javax.swing.table.DefaultTableCellRenderer;
+import javax.swing.table.DefaultTableModel;
+import javax.swing.table.JTableHeader;
+import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.awt.geom.RoundRectangle2D;
+import java.sql.*;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -10,10 +16,11 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 
- ==========================================
- 1. Model (数据模型)
- ==========================================
+// ==========================================
+// 1. Domain Entities
+// ==========================================
 
 class Product {
     String id;
@@ -37,166 +44,158 @@ class SaleItem {
     public SaleItem(Product product, int quantity) {
         this.product = product;
         this.quantity = quantity;
-        this.subtotal = product.price  quantity;
+        this.subtotal = product.price * quantity;
     }
 }
 
- ==========================================
- 2. ControllerService (数据库版本)
- ==========================================
+// ==========================================
+// 2. System Controller (Backend)
+// ==========================================
 
 class POSSystem {
-    private MapString, Product inventory = new HashMap();
-    private ListSaleItem currentCart = new ArrayList();
-    
-     数据库连接字符串 (会自动在当前目录下创建 pos.db 文件)
-    private final String DB_URL = jdbcsqlitepos.db;
+    private Map<String, Product> inventory = new HashMap<>();
+    private List<SaleItem> currentCart = new ArrayList<>();
+
+    // 数据库连接
+    private final String DB_URL = "jdbc:sqlite:pos.db?busy_timeout=5000";
 
     public POSSystem() {
-        initDatabase();  初始化数据库表
-        loadInventoryFromDB();  从数据库加载数据到内存
+        initDatabase();
+        loadInventoryFromDB();
     }
-
-     --- 数据库核心方法 ---
 
     private Connection connect() throws SQLException {
         return DriverManager.getConnection(DB_URL);
     }
 
     private void initDatabase() {
-         SQL 创建表
-        String sqlCreate = CREATE TABLE IF NOT EXISTS products (
-                + id TEXT PRIMARY KEY, 
-                + name TEXT NOT NULL, 
-                + price REAL, 
-                + stock INTEGER);
-
         try (Connection conn = connect();
              Statement stmt = conn.createStatement()) {
-            
-             1. 创建表
+
+            stmt.execute("PRAGMA journal_mode=WAL;"); // WAL mode
+
+            String sqlCreate = "CREATE TABLE IF NOT EXISTS products ("
+                    + "id TEXT PRIMARY KEY, "
+                    + "name TEXT NOT NULL, "
+                    + "price REAL, "
+                    + "stock INTEGER)";
             stmt.execute(sqlCreate);
-            
-             2. 检查是否为空，如果为空插入默认数据
-            ResultSet rs = stmt.executeQuery(SELECT count() FROM products);
+
+            // Default data
+            ResultSet rs = stmt.executeQuery("SELECT count(*) FROM products");
             if (rs.next() && rs.getInt(1) == 0) {
-                System.out.println(DB Table empty, inserting defaults...);
-                insertDefaultProduct(conn, 101, Fresh Milk, 3.50, 20);
-                insertDefaultProduct(conn, 102, Sourdough Bread, 5.00, 15);
-                insertDefaultProduct(conn, 103, Apple (Red), 0.80, 100);
-                insertDefaultProduct(conn, 104, Cola Can, 1.50, 50);
-                insertDefaultProduct(conn, 105, Chocolate Bar, 2.00, 30);
+                addProductToCatalog("101", "Fresh Milk", 3.50, 20);
+                addProductToCatalog("102", "Sourdough Bread", 5.00, 15);
+                addProductToCatalog("103", "Apple (Red)", 0.80, 100);
+                addProductToCatalog("104", "Cola Can", 1.50, 50);
+                addProductToCatalog("105", "Chocolate Bar", 2.00, 30);
             }
 
-        } catch (SQLException e) {
-            System.err.println(DB Init Error  + e.getMessage());
+        } catch (Exception e) {
+            System.err.println("DB Init Error: " + e.getMessage());
         }
     }
 
-    private void insertDefaultProduct(Connection conn, String id, String name, double price, int stock) throws SQLException {
-        String sql = INSERT INTO products(id, name, price, stock) VALUES(,,,);
-        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setString(1, id);
-            pstmt.setString(2, name);
-            pstmt.setDouble(3, price);
-            pstmt.setInt(4, stock);
-            pstmt.executeUpdate();
-        }
-    }
-
-     从数据库加载所有数据到 inventory Map
     private void loadInventoryFromDB() {
         inventory.clear();
-        String sql = SELECT id, name, price, stock FROM products;
-        
+        String sql = "SELECT id, name, price, stock FROM products";
         try (Connection conn = connect();
              Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
-            
             while (rs.next()) {
                 Product p = new Product(
-                    rs.getString(id),
-                    rs.getString(name),
-                    rs.getDouble(price),
-                    rs.getInt(stock)
+                        rs.getString("id"),
+                        rs.getString("name"),
+                        rs.getDouble("price"),
+                        rs.getInt("stock")
                 );
                 inventory.put(p.id, p);
             }
-            System.out.println(System Inventory loaded from Database.);
-            
         } catch (SQLException e) {
-            System.err.println(Load Error  + e.getMessage());
+            System.err.println("Load Error: " + e.getMessage());
         }
     }
 
-     更新单个商品的库存 (事务处理)
     private void updateProductStockInDB(String productId, int newStock) {
-        String sql = UPDATE products SET stock =  WHERE id = ;
+        String sql = "UPDATE products SET stock = ? WHERE id = ?";
         try (Connection conn = connect();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setInt(1, newStock);
             pstmt.setString(2, productId);
             pstmt.executeUpdate();
         } catch (SQLException e) {
-            System.err.println(Update Stock Error  + e.getMessage());
+            System.err.println("Update Stock Error: " + e.getMessage());
         }
     }
 
-     --- 业务功能 ---
+    // --- [新增功能] 手动添加商品 ---
+    public void addProductToCatalog(String id, String name, double price, int stock) throws Exception {
+        if (inventory.containsKey(id)) {
+            throw new Exception("Product ID '" + id + "' already exists.");
+        }
+
+        String sql = "INSERT INTO products(id, name, price, stock) VALUES(?,?,?,?)";
+        try (Connection conn = connect();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, id);
+            pstmt.setString(2, name);
+            pstmt.setDouble(3, price);
+            pstmt.setInt(4, stock);
+            pstmt.executeUpdate();
+
+            // 更新内存缓存
+            Product newProduct = new Product(id, name, price, stock);
+            inventory.put(id, newProduct);
+
+        } catch (SQLException e) {
+            throw new Exception("Database Error: " + e.getMessage());
+        }
+    }
+
+    // --- Business Logic ---
 
     public Product getProduct(String id) {
         return inventory.get(id);
     }
 
-    public String getInventoryStatus() {
-        StringBuilder sb = new StringBuilder();
-        sb.append(String.format(%-5s %-18s %-7s %sn, ID, Name, Price, Stock));
-        sb.append(------------------------------------------n);
-        inventory.values().stream()
-                .sorted(Comparator.comparing(p - p.id))
-                .forEach(p - {
-                    sb.append(String.format(%-5s %-18s $%-6.2f [%d]n, p.id, p.name, p.price, p.stock));
-                });
-        return sb.toString();
+    public List<Product> getAllProducts() {
+        return new ArrayList<>(inventory.values());
     }
 
-     功能 1 记录销售项
     public String recordSaleItem(String id, int quantity) throws Exception {
         Product p = getProduct(id);
-        if (p == null) throw new Exception(Error Product ID not found.);
+        if (p == null) {
+            throw new Exception("Product ID '" + id + "' not found.\nSuggestion: Please check the item or enter ID manually.");
+        }
 
         int currentCartQty = currentCart.stream()
-                .filter(item - item.product.id.equals(id))
-                .mapToInt(item - item.quantity)
+                .filter(item -> item.product.id.equals(id))
+                .mapToInt(item -> item.quantity)
                 .sum();
 
-        if ((p.stock - currentCartQty)  quantity) {
-            throw new Exception(Error Insufficient stock. Only  + p.stock +  available.);
+        if ((p.stock - currentCartQty) < quantity) {
+            throw new Exception("Error: Insufficient stock. Only " + p.stock + " available.");
         }
 
         SaleItem item = new SaleItem(p, quantity);
         currentCart.add(item);
-        
-        return String.format(Recorded %s x%d = $%.2f, p.name, quantity, item.subtotal);
+
+        return String.format("Recorded: %s x%d = $%.2f", p.name, quantity, item.subtotal);
     }
 
     public double getRunningTotal() {
-        return currentCart.stream().mapToDouble(i - i.subtotal).sum();
+        return currentCart.stream().mapToDouble(i -> i.subtotal).sum();
     }
 
-     功能 2 支付 (更新 DB)
     public String processPayment(double cashTendered) throws Exception {
         double total = getRunningTotal();
-        if (currentCart.isEmpty()) throw new Exception(Cart is empty.);
-        if (cashTendered  total) throw new Exception(String.format(Insufficient cash. Need $%.2f, total));
+        if (currentCart.isEmpty()) throw new Exception("Cart is empty.");
+        if (cashTendered < total) throw new Exception(String.format("Insufficient cash. Need $%.2f", total));
 
         double change = cashTendered - total;
 
-         更新库存
-        for (SaleItem item  currentCart) {
-             1. 更新内存
+        for (SaleItem item : currentCart) {
             item.product.stock -= item.quantity;
-             2. [关键] 更新数据库
             updateProductStockInDB(item.product.id, item.product.stock);
         }
 
@@ -205,208 +204,329 @@ class POSSystem {
         return receipt;
     }
 
-     功能 3 退货 (更新 DB)
     public String processReturn(String id, int quantity) throws Exception {
         Product p = getProduct(id);
-        if (p == null) throw new Exception(Error Product ID not found.);
+        if (p == null) throw new Exception("Product ID '" + id + "' not found.");
 
-         1. 更新内存
         p.stock += quantity;
-        double refund = p.price  quantity;
-
-         2. [关键] 更新数据库
         updateProductStockInDB(p.id, p.stock);
+        double refundAmount = p.price * quantity;
 
-        return String.format(Return Processed %s x%dnInventory Updated +%dnRefund Amount $%.2f, 
-                p.name, quantity, quantity, refund);
+        boolean creditCardSuccess = new Random().nextBoolean();
+
+        StringBuilder msg = new StringBuilder();
+        msg.append(String.format("Return Processed: %s x%d\n", p.name, quantity));
+        msg.append(String.format("Inventory Updated: +%d\n", quantity));
+        msg.append("------------------------------\n");
+
+        if (creditCardSuccess) {
+            msg.append(String.format("SUCCESS: Refunded $%.2f to Credit Card.", refundAmount));
+        } else {
+            msg.append("ALERT: Credit Card Refund DECLINED.\n");
+            msg.append(String.format("ACTION: Refund CASH $%.2f", refundAmount));
+        }
+
+        return msg.toString();
     }
 
     private String generateReceipt(double cash, double change) {
         StringBuilder sb = new StringBuilder();
-        DateTimeFormatter dtf = DateTimeFormatter.ofPattern(yyyy-MM-dd HHmmss);
-        sb.append(n==================================n);
-        sb.append(       OFFICIAL RECEIPTn);
-        sb.append(        + dtf.format(LocalDateTime.now()) + n);
-        sb.append(==================================n);
-        sb.append(String.format(%-15s %-5s %sn, Item, Qty, Price));
-        sb.append(----------------------------------n);
-        
+        DateTimeFormatter dtf = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+        sb.append("\n==================================\n");
+        sb.append("       OFFICIAL RECEIPT\n");
+        sb.append("       " + dtf.format(LocalDateTime.now()) + "\n");
+        sb.append("==================================\n");
+        sb.append(String.format("%-15s %-5s %s\n", "Item", "Qty", "Price"));
+        sb.append("----------------------------------\n");
+
         double total = 0;
-        for (SaleItem item  currentCart) {
-            sb.append(String.format(%-15s x%-4d $%.2fn, item.product.name, item.quantity, item.subtotal));
+        for (SaleItem item : currentCart) {
+            sb.append(String.format("%-15s x%-4d $%.2f\n", item.product.name, item.quantity, item.subtotal));
             total += item.subtotal;
         }
-        
-        sb.append(----------------------------------n);
-        sb.append(String.format(TOTAL          $%.2fn, total));
-        sb.append(String.format(CASH PAID      $%.2fn, cash));
-        sb.append(String.format(CHANGE         $%.2fn, change));
-        sb.append(==================================n);
-        sb.append(    Thank you for shopping!);
+
+        sb.append("----------------------------------\n");
+        sb.append(String.format("TOTAL:          $%.2f\n", total));
+        sb.append(String.format("CASH PAID:      $%.2f\n", cash));
+        sb.append(String.format("CHANGE:         $%.2f\n", change));
+        sb.append("==================================\n");
+        sb.append("    Thank you for shopping!");
         return sb.toString();
     }
 }
 
- ==========================================
- 3. View (前端 UI - 保持不变)
- ==========================================
+// ==========================================
+// 3. UI Layer (Frontend)
+// ==========================================
 
 public class POSApplication extends JFrame {
-    
+
     private POSSystem system;
-    private JTextField txtId, txtQty, txtCash;
-    private JTextArea txtScreen, txtInventory;
+
+    // UI Components
+    private ModernTextField txtId, txtQty, txtCash;
+    private JTextArea txtScreen;
+    private JTable tblInventory;
+    private DefaultTableModel tableModel;
     private JLabel lblTotal;
 
-     Dark Theme Colors
-    private final Color COL_MAIN_BG = new Color(30, 30, 30);
-    private final Color COL_PANEL_BG = new Color(50, 50, 50);
-    private final Color COL_INPUT_BG = new Color(70, 70, 70);
-    private final Color COL_TEXT_WHT = new Color(230, 230, 230);
-    private final Color COL_ACCENT_GREEN = new Color(46, 204, 113);
-    private final Color COL_ACCENT_BLUE = new Color(52, 152, 219);
-    private final Color COL_ACCENT_RED = new Color(231, 76, 60);
+    private boolean isNewTransaction = true;
+
+    // Colors
+    private final Color CLR_BG_DARK     = new Color(33, 33, 33);
+    private final Color CLR_PANEL       = new Color(48, 48, 48);
+    private final Color CLR_TEXT_MAIN   = new Color(240, 240, 240);
+    private final Color CLR_TEXT_MUTE   = new Color(170, 170, 170);
+    private final Color CLR_ACCENT_BLUE = new Color(58, 150, 221);
+    private final Color CLR_ACCENT_GREEN= new Color(76, 175, 80);
+    private final Color CLR_ACCENT_RED  = new Color(229, 57, 53);
+    private final Color CLR_ACCENT_ORANGE = new Color(255, 152, 0); // ADMIN Color
+    private final Color CLR_INPUT_BG    = new Color(60, 60, 60);
+
+    // Fonts
+    private final Font FONT_HEADER = new Font("Segoe UI", Font.BOLD, 22);
+    private final Font FONT_LABEL  = new Font("Segoe UI", Font.PLAIN, 14);
+    private final Font FONT_INPUT  = new Font("Segoe UI", Font.PLAIN, 16);
+    private final Font FONT_TOTAL  = new Font("Segoe UI", Font.BOLD, 48);
 
     public POSApplication() {
-         在实例化 POSSystem 时，会自动连接数据库
-        system = new POSSystem();
-        initUI();
-        refreshInventoryUI();
+        System.setProperty("awt.useSystemAAFontSettings", "on");
+        System.setProperty("swing.aatext", "true");
+
+        try {
+            system = new POSSystem();
+            initUI();
+            refreshInventoryUI();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     private void initUI() {
-        setTitle(POS System - SQLite Database Version);
-        setSize(1100, 750);
+        setTitle("Modern POS System (Java + SQLite)");
+        setSize(1200, 800);
+        setMinimumSize(new Dimension(1000, 700));
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
-        setLayout(new GridLayout(1, 2)); 
 
-         === Left Panel ===
-        JPanel leftPanel = new JPanel(new GridBagLayout());
-        leftPanel.setBackground(COL_PANEL_BG);
-        leftPanel.setBorder(new EmptyBorder(20, 20, 20, 20));
-        
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.fill = GridBagConstraints.HORIZONTAL;
-        gbc.insets = new Insets(8, 5, 8, 5);
-        gbc.weightx = 1.0;
-        gbc.gridx = 0; gbc.gridy = 0;
+        getContentPane().setBackground(CLR_BG_DARK);
+        setLayout(new BorderLayout(0, 0));
 
-        JLabel lblHeader = new JLabel(Cashier Controls (DB));
-        lblHeader.setFont(new Font(Segoe UI, Font.BOLD, 22));
-        lblHeader.setForeground(COL_TEXT_WHT);
-        leftPanel.add(lblHeader, gbc);
+        JPanel mainContainer = new JPanel(new BorderLayout(20, 20));
+        mainContainer.setBackground(CLR_BG_DARK);
+        mainContainer.setBorder(new EmptyBorder(20, 20, 20, 20));
+        add(mainContainer);
 
-        gbc.gridy++; leftPanel.add(createLabel(Item ID), gbc);
-        txtId = createField(); 
-        gbc.gridy++; leftPanel.add(txtId, gbc);
+        // --- Left Panel ---
+        JPanel leftPanel = new JPanel();
+        leftPanel.setLayout(new BoxLayout(leftPanel, BoxLayout.Y_AXIS));
+        leftPanel.setBackground(CLR_PANEL);
+        leftPanel.setBorder(new EmptyBorder(25, 25, 25, 25));
 
-        gbc.gridy++; leftPanel.add(createLabel(Quantity), gbc);
-        txtQty = createField(); txtQty.setText(1);
-        gbc.gridy++; leftPanel.add(txtQty, gbc);
+        JLabel title = new JLabel("CASHIER CONTROLS");
+        title.setFont(FONT_HEADER);
+        title.setForeground(CLR_TEXT_MAIN);
+        title.setAlignmentX(Component.LEFT_ALIGNMENT);
+        leftPanel.add(title);
+        leftPanel.add(Box.createVerticalStrut(20));
 
-        addSeparator(leftPanel, gbc, Process Sale);
-        JButton btnScan = createButton(Scan Item, COL_ACCENT_BLUE);
-        btnScan.addActionListener(e - actionScan());
-        gbc.gridy++; leftPanel.add(btnScan, gbc);
+        // Inputs
+        leftPanel.add(createLabel("Item ID / Barcode"));
+        leftPanel.add(Box.createVerticalStrut(5));
+        txtId = new ModernTextField();
+        leftPanel.add(txtId);
+        leftPanel.add(Box.createVerticalStrut(10));
 
-        gbc.gridy++; leftPanel.add(createLabel(Cash Tendered ($)), gbc);
-        txtCash = createField();
-        gbc.gridy++; leftPanel.add(txtCash, gbc);
+        leftPanel.add(createLabel("Quantity"));
+        leftPanel.add(Box.createVerticalStrut(5));
+        txtQty = new ModernTextField();
+        txtQty.setText("1");
+        leftPanel.add(txtQty);
+        leftPanel.add(Box.createVerticalStrut(20));
 
-        JButton btnPay = createButton(Pay & Print Receipt, COL_ACCENT_GREEN);
-        btnPay.addActionListener(e - actionPay());
-        gbc.gridy++; leftPanel.add(btnPay, gbc);
+        // Cashier Buttons
+        leftPanel.add(createSectionLabel("ACTIONS"));
+        leftPanel.add(Box.createVerticalStrut(10));
 
-        addSeparator(leftPanel, gbc, Handle Returns);
-        JButton btnReturn = createButton(Process Return, COL_ACCENT_RED);
-        btnReturn.addActionListener(e - actionReturn());
-        gbc.gridy++; leftPanel.add(btnReturn, gbc);
+        ModernButton btnScan = new ModernButton("Scan Item", CLR_ACCENT_BLUE);
+        btnScan.addActionListener(e -> actionScan());
+        leftPanel.add(btnScan);
+        leftPanel.add(Box.createVerticalStrut(10));
 
-        addSeparator(leftPanel, gbc, Live Inventory (From DB));
-        txtInventory = new JTextArea(10, 30);
-        txtInventory.setFont(new Font(Monospaced, Font.PLAIN, 12));
-        txtInventory.setBackground(new Color(40, 40, 40));
-        txtInventory.setForeground(Color.CYAN);
-        txtInventory.setEditable(false);
-        txtInventory.setBorder(new LineBorder(Color.DARK_GRAY));
-        gbc.gridy++; gbc.weighty = 1.0; gbc.fill = GridBagConstraints.BOTH;
-        leftPanel.add(new JScrollPane(txtInventory), gbc);
+        ModernButton btnReturn = new ModernButton("Handle Return", CLR_ACCENT_RED);
+        btnReturn.addActionListener(e -> actionReturn());
+        leftPanel.add(btnReturn);
+        leftPanel.add(Box.createVerticalStrut(20));
 
-         === Right Panel ===
+        // Payment
+        leftPanel.add(createSectionLabel("PAYMENT"));
+        leftPanel.add(Box.createVerticalStrut(10));
+        txtCash = new ModernTextField();
+        txtCash.setPlaceholder("Enter Cash Amount ($)");
+        leftPanel.add(txtCash);
+        leftPanel.add(Box.createVerticalStrut(10));
+
+        ModernButton btnPay = new ModernButton("Process Payment", CLR_ACCENT_GREEN);
+        btnPay.addActionListener(e -> actionPay());
+        leftPanel.add(btnPay);
+
+        // --- [新增] ADMIN / Manage 区域 ---
+        leftPanel.add(Box.createVerticalStrut(20));
+        leftPanel.add(createSectionLabel("ADMIN / MANAGE"));
+        leftPanel.add(Box.createVerticalStrut(10));
+        ModernButton btnAddProduct = new ModernButton("Add New Product", CLR_ACCENT_ORANGE);
+        btnAddProduct.addActionListener(e -> actionAddProduct());
+        leftPanel.add(btnAddProduct);
+
+        // Inventory Table
+        leftPanel.add(Box.createVerticalStrut(20));
+        leftPanel.add(createSectionLabel("LIVE INVENTORY (DB)"));
+        leftPanel.add(Box.createVerticalStrut(5));
+
+        String[] columnNames = {"ID", "Name", "Price", "Stock"};
+        tableModel = new DefaultTableModel(columnNames, 0) {
+            @Override
+            public boolean isCellEditable(int row, int column) { return false; }
+        };
+
+        tblInventory = new JTable(tableModel);
+        tblInventory.setBackground(CLR_INPUT_BG);
+        tblInventory.setForeground(new Color(100, 181, 246));
+        tblInventory.setGridColor(new Color(80, 80, 80));
+        tblInventory.setRowHeight(25);
+        tblInventory.setFont(new Font("Segoe UI", Font.PLAIN, 14));
+        tblInventory.setShowVerticalLines(false);
+        tblInventory.setFillsViewportHeight(true);
+
+        JTableHeader header = tblInventory.getTableHeader();
+        header.setBackground(CLR_PANEL);
+        header.setForeground(Color.LIGHT_GRAY);
+        header.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        header.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, Color.GRAY));
+
+        DefaultTableCellRenderer centerRenderer = new DefaultTableCellRenderer();
+        centerRenderer.setHorizontalAlignment(JLabel.CENTER);
+        DefaultTableCellRenderer rightRenderer = new DefaultTableCellRenderer();
+        rightRenderer.setHorizontalAlignment(JLabel.RIGHT);
+
+        tblInventory.getColumnModel().getColumn(0).setPreferredWidth(50);
+        tblInventory.getColumnModel().getColumn(0).setCellRenderer(centerRenderer);
+        tblInventory.getColumnModel().getColumn(1).setPreferredWidth(140);
+        tblInventory.getColumnModel().getColumn(2).setPreferredWidth(60);
+        tblInventory.getColumnModel().getColumn(2).setCellRenderer(rightRenderer);
+        tblInventory.getColumnModel().getColumn(3).setPreferredWidth(50);
+        tblInventory.getColumnModel().getColumn(3).setCellRenderer(centerRenderer);
+
+        JScrollPane scrollInv = new JScrollPane(tblInventory);
+        scrollInv.setBorder(new LineBorder(CLR_PANEL, 1));
+        scrollInv.getViewport().setBackground(CLR_INPUT_BG);
+        scrollInv.setAlignmentX(Component.LEFT_ALIGNMENT);
+        leftPanel.add(scrollInv);
+
+        // --- Right Panel ---
         JPanel rightPanel = new JPanel(new BorderLayout());
-        rightPanel.setBackground(COL_MAIN_BG);
-        rightPanel.setBorder(new EmptyBorder(20, 20, 20, 20));
+        rightPanel.setBackground(Color.BLACK);
+        rightPanel.setBorder(new LineBorder(new Color(60,60,60), 5));
 
         txtScreen = new JTextArea();
-        txtScreen.setFont(new Font(Monospaced, Font.BOLD, 14));
+        txtScreen.setFont(new Font("Monospaced", Font.BOLD, 16));
         txtScreen.setBackground(Color.BLACK);
-        txtScreen.setForeground(Color.GREEN);
+        txtScreen.setForeground(new Color(0, 255, 100)); // Green
         txtScreen.setEditable(false);
-        txtScreen.setText( SYSTEM READY...n Connected to SQLite Database.n);
-        txtScreen.setMargin(new Insets(15, 15, 15, 15));
-        
-        rightPanel.add(new JScrollPane(txtScreen), BorderLayout.CENTER);
+        txtScreen.setText("\n  >> SYSTEM INITIALIZED...\n  >> READY FOR TRANSACTION...\n");
+        txtScreen.setMargin(new Insets(20, 20, 20, 20));
+        txtScreen.setCaretColor(Color.WHITE);
 
-        lblTotal = new JLabel(Total $0.00, SwingConstants.CENTER);
-        lblTotal.setFont(new Font(Segoe UI, Font.BOLD, 48));
-        lblTotal.setForeground(COL_TEXT_WHT);
-        lblTotal.setBorder(new EmptyBorder(20, 0, 0, 0));
-        rightPanel.add(lblTotal, BorderLayout.SOUTH);
+        JScrollPane scrollScreen = new JScrollPane(txtScreen);
+        scrollScreen.setBorder(null);
+        rightPanel.add(scrollScreen, BorderLayout.CENTER);
 
-        add(leftPanel);
-        add(rightPanel);
+        JPanel totalPanel = new JPanel(new BorderLayout());
+        totalPanel.setBackground(new Color(20, 20, 20));
+        totalPanel.setBorder(new EmptyBorder(20, 30, 20, 30));
+
+        lblTotal = new JLabel("Total: $0.00");
+        lblTotal.setFont(FONT_TOTAL);
+        lblTotal.setForeground(Color.WHITE);
+        lblTotal.setHorizontalAlignment(SwingConstants.RIGHT);
+
+        totalPanel.add(lblTotal, BorderLayout.CENTER);
+        rightPanel.add(totalPanel, BorderLayout.SOUTH);
+
+        JSplitPane splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftPanel, rightPanel);
+        splitPane.setDividerLocation(420);
+        splitPane.setDividerSize(0);
+        splitPane.setBorder(null);
+
+        mainContainer.add(splitPane, BorderLayout.CENTER);
     }
 
+    // --- Helpers ---
     private JLabel createLabel(String text) {
         JLabel l = new JLabel(text);
-        l.setForeground(Color.LIGHT_GRAY);
-        l.setFont(new Font(Segoe UI, Font.PLAIN, 14));
+        l.setFont(FONT_LABEL);
+        l.setForeground(CLR_TEXT_MUTE);
+        l.setAlignmentX(Component.LEFT_ALIGNMENT);
         return l;
     }
-    private JTextField createField() {
-        JTextField t = new JTextField();
-        t.setFont(new Font(Segoe UI, Font.PLAIN, 16));
-        t.setBackground(COL_INPUT_BG);
-        t.setForeground(Color.WHITE);
-        t.setCaretColor(Color.WHITE);
-        t.setBorder(BorderFactory.createCompoundBorder(new LineBorder(Color.GRAY), new EmptyBorder(5, 5, 5, 5)));
-        return t;
-    }
-    private JButton createButton(String text, Color bg) {
-        JButton b = new JButton(text);
-        b.setFont(new Font(Segoe UI, Font.BOLD, 14));
-        b.setBackground(bg);
-        b.setForeground(Color.WHITE);
-        b.setFocusPainted(false);
-        b.setBorderPainted(false);
-        return b;
-    }
-    private void addSeparator(JPanel p, GridBagConstraints gbc, String text) {
-        gbc.gridy++; gbc.weighty = 0; gbc.fill = GridBagConstraints.HORIZONTAL;
+
+    private JLabel createSectionLabel(String text) {
         JLabel l = new JLabel(text);
-        l.setForeground(Color.GRAY);
-        l.setBorder(new EmptyBorder(15, 0, 5, 0));
-        p.add(l, gbc);
+        l.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        l.setForeground(new Color(100, 100, 100));
+        l.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return l;
     }
 
     private void log(String msg) {
-        txtScreen.append(msg + n);
+        txtScreen.append(msg + "\n");
         txtScreen.setCaretPosition(txtScreen.getDocument().getLength());
     }
+
     private void refreshInventoryUI() {
-        txtInventory.setText(system.getInventoryStatus());
+        if (system == null) return;
+        tableModel.setRowCount(0);
+        List<Product> products = system.getAllProducts();
+        products.sort(Comparator.comparing(p -> p.id));
+
+        for (Product p : products) {
+            tableModel.addRow(new Object[]{p.id, p.name, String.format("$%.2f", p.price), p.stock});
+        }
     }
+
+    private void checkAutoRefresh() {
+        if (isNewTransaction) {
+            txtScreen.setText("");
+            txtScreen.append(">> NEW TRANSACTION STARTED...\n");
+            lblTotal.setText("Total: $0.00");
+            lblTotal.setForeground(Color.WHITE);
+            isNewTransaction = false;
+        }
+    }
+
+    private void prepareNextTransaction() {
+        txtId.setText("");
+        txtQty.setText("1");
+        txtCash.setText("");
+        isNewTransaction = true;
+    }
+
+    // --- Actions ---
 
     private void actionScan() {
         try {
+            checkAutoRefresh();
             String id = txtId.getText().trim();
             int qty = Integer.parseInt(txtQty.getText().trim());
+
             String msg = system.recordSaleItem(id, qty);
-            log(  + msg);
-            lblTotal.setText(String.format(Total $%.2f, system.getRunningTotal()));
+
+            log(">> " + msg);
+            lblTotal.setText(String.format("Total: $%.2f", system.getRunningTotal()));
+            txtId.setText("");
+            txtId.requestFocus();
         } catch (Exception ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(), Error, JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "Input Error", JOptionPane.WARNING_MESSAGE);
         }
     }
 
@@ -414,43 +534,162 @@ public class POSApplication extends JFrame {
         try {
             double cash = Double.parseDouble(txtCash.getText().trim());
             String receipt = system.processPayment(cash);
-            log( Payment Accepted.);
-            log( Database Updated.);
-            log( Printing Receipt...);
-            txtScreen.setText();
+
+            log(">> PAYMENT AUTHORIZED.");
+            log(">> INVENTORY UPDATED.");
+            txtScreen.setText("");
             txtScreen.append(receipt);
-            lblTotal.setText(Transaction Done);
+
+            lblTotal.setText("PAID");
+            lblTotal.setForeground(CLR_ACCENT_GREEN);
+
             refreshInventoryUI();
+            prepareNextTransaction();
         } catch (Exception ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(), Payment Error, JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "Payment Error", JOptionPane.ERROR_MESSAGE);
         }
     }
 
     private void actionReturn() {
         try {
+            checkAutoRefresh();
             String id = txtId.getText().trim();
             int qty = Integer.parseInt(txtQty.getText().trim());
             String msg = system.processReturn(id, qty);
-            txtScreen.setText();
-            txtScreen.append( --- RETURN MODE ---n);
+
+            txtScreen.setText("");
+            txtScreen.append(">> --- RETURN MODE ---\n");
             txtScreen.append(msg);
-            lblTotal.setText(Refund Mode);
+
+            lblTotal.setText("REFUND");
+            lblTotal.setForeground(CLR_ACCENT_RED);
+
             refreshInventoryUI();
+            prepareNextTransaction();
         } catch (Exception ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(), Return Error, JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "Return Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+
+    private void actionAddProduct() {
+
+        JPanel panel = new JPanel(new GridLayout(4, 2, 10, 10));
+        panel.setPreferredSize(new Dimension(300, 150));
+
+        ModernTextField fieldId = new ModernTextField();
+        ModernTextField fieldName = new ModernTextField();
+        ModernTextField fieldPrice = new ModernTextField();
+        ModernTextField fieldStock = new ModernTextField();
+
+
+        panel.add(new JLabel("New Item ID:"));
+        panel.add(fieldId);
+        panel.add(new JLabel("Item Name:"));
+        panel.add(fieldName);
+        panel.add(new JLabel("Price ($):"));
+        panel.add(fieldPrice);
+        panel.add(new JLabel("Initial Stock:"));
+        panel.add(fieldStock);
+
+        int result = JOptionPane.showConfirmDialog(this, panel, "Add New Product to Catalog",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+
+        if (result == JOptionPane.OK_OPTION) {
+            try {
+                String id = fieldId.getText().trim();
+                String name = fieldName.getText().trim();
+                if (id.isEmpty() || name.isEmpty()) throw new Exception("ID and Name cannot be empty.");
+
+                double price = Double.parseDouble(fieldPrice.getText().trim());
+                int stock = Integer.parseInt(fieldStock.getText().trim());
+
+                // 调用后台添加
+                system.addProductToCatalog(id, name, price, stock);
+
+                // 成功提示
+                JOptionPane.showMessageDialog(this, "Product Added Successfully!");
+                log(">> ADMIN: New Product Added (" + name + ")");
+
+                // 刷新库存表
+                refreshInventoryUI();
+
+            } catch (NumberFormatException ex) {
+                JOptionPane.showMessageDialog(this, "Invalid Price or Stock number.", "Error", JOptionPane.ERROR_MESSAGE);
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(this, ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+            }
+        }
+    }
+
+    // --- Custom Components ---
+
+    class ModernButton extends JButton {
+        private Color normalColor;
+        private Color hoverColor;
+
+        public ModernButton(String text, Color baseColor) {
+            super(text);
+            this.normalColor = baseColor;
+            this.hoverColor = baseColor.brighter();
+            setFont(new Font("Segoe UI", Font.BOLD, 15));
+            setForeground(Color.WHITE);
+            setFocusPainted(false);
+            setBorderPainted(false);
+            setContentAreaFilled(false);
+            setCursor(new Cursor(Cursor.HAND_CURSOR));
+            setAlignmentX(Component.LEFT_ALIGNMENT);
+            setMaximumSize(new Dimension(Integer.MAX_VALUE, 45));
+
+            addMouseListener(new MouseAdapter() {
+                public void mouseEntered(MouseEvent e) { setBackground(hoverColor); repaint(); }
+                public void mouseExited(MouseEvent e) { setBackground(normalColor); repaint(); }
+            });
+        }
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            if (getModel().isRollover()) g2.setColor(hoverColor);
+            else g2.setColor(normalColor);
+            g2.fill(new RoundRectangle2D.Float(0, 0, getWidth(), getHeight(), 10, 10));
+            super.paintComponent(g);
+            g2.dispose();
+        }
+    }
+
+    class ModernTextField extends JTextField {
+        private String placeholder = "";
+        public ModernTextField() {
+            setFont(FONT_INPUT);
+            setBackground(CLR_INPUT_BG);
+            setForeground(Color.WHITE);
+            setCaretColor(Color.WHITE);
+            setBorder(BorderFactory.createCompoundBorder(new LineBorder(CLR_PANEL, 0), new EmptyBorder(8, 10, 8, 10)));
+            setAlignmentX(Component.LEFT_ALIGNMENT);
+            setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
+        }
+        public void setPlaceholder(String text) { this.placeholder = text; }
+        @Override
+        protected void paintComponent(Graphics pG) {
+            super.paintComponent(pG);
+            if (placeholder.length() > 0 && getText().length() == 0) {
+                Graphics2D g = (Graphics2D) pG;
+                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g.setColor(new Color(150, 150, 150));
+                g.setFont(getFont().deriveFont(Font.ITALIC));
+                g.drawString(placeholder, getInsets().left, pG.getFontMetrics().getMaxAscent() + getInsets().top);
+            }
         }
     }
 
     public static void main(String[] args) {
-         加载驱动检查 (可选，用于调试)
-        try {
-            Class.forName(org.sqlite.JDBC);
-        } catch (ClassNotFoundException e) {
-            JOptionPane.showMessageDialog(null, SQLite JDBC Driver not found!nPlease check classpath.);
+        try { Class.forName("org.sqlite.JDBC"); }
+        catch (ClassNotFoundException e) {
+            JOptionPane.showMessageDialog(null, "SQLite Driver not found! Check classpath.");
             return;
         }
-
-        SwingUtilities.invokeLater(() - {
+        SwingUtilities.invokeLater(() -> {
             new POSApplication().setVisible(true);
         });
     }
